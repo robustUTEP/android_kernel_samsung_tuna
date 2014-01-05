@@ -1427,7 +1427,7 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
 	struct timespec timestart, timeend;
 	if (timeTo40Thou == 0) {
 	    getnstimeofday(&timestart);
-	    for (i = 0; i < 100000; i++) {
+	    for (i = 0; i < 10000; i++) {
 	        cpufreq_driver->target(policy, 350000, relation);
 	        cpufreq_driver->target(policy, 700000, relation);
 	        cpufreq_driver->target(policy, 900000, relation);
@@ -1440,7 +1440,7 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
 	
     if (timeToThou == 0) {
 	    getnstimeofday(&timestart);
-	    for (i = 0; i < 10000; i++) {
+	    for (i = 0; i < 1000; i++) {
 	        cpufreq_driver->target(policy, 350000, relation);
 	        cpufreq_driver->target(policy, 700000, relation);
 	        cpufreq_driver->target(policy, 900000, relation);
