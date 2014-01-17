@@ -33,6 +33,10 @@
 #include <trace/events/power.h>
 #include <linux/time.h>
 
+//Snappy Mod
+#include <linux/proc_fs.h> 
+#include <linux/seq_file.h>
+
 /**
  * The "cpufreq driver" - the arch- or hardware-dependent low
  * level driver of CPUFreq support, and its spinlock. This lock
@@ -85,6 +89,93 @@ static int lock_policy_rwsem_##mode					\
 									\
 	return 0;							\
 }
+
+#define SPEED_LIST_SIZE 2000
+
+/* log buffer structure */
+struct speed_log {
+    int seqNumb;
+    unsigned cpu;
+    unsigned speed;
+    unsigned relation;
+    struct timespec time;
+};
+
+struct speed_log *speed_changes[SPEED_LIST_SIZE];
+static int currEntry = 0;
+static unsigned int currentPrint = 0;
+
+/* snappy seq code */
+static void *ct_seq_start(struct seq_file *s, loff_t *pos)
+{   
+    /* begin a new sequence ?*/
+	if (currentPrint < SPEED_LIST_SIZE) {
+	    /* return non null to start sequence */
+		return &currentPrint;
+    } else {
+        /* end of sequence signal NULL to terminate */
+        *pos = 0;
+        currentPrint = 0;
+	    return NULL;
+	}
+}
+
+static void *ct_seq_next(struct seq_file *s, void *v, loff_t *pos)
+{
+    /* advance counts */
+	unsigned long *tmp_v = (unsigned long *)v;
+	(*tmp_v)++;
+	(*pos)++;
+	//currentPrint++;
+	return NULL;
+}
+
+static void ct_seq_stop(struct seq_file *s, void *v)
+{
+	/* we don't need cleanup at the end of the sequence */
+}
+
+static int ct_seq_show(struct seq_file *s, void *v)
+{
+
+    loff_t *spos = (loff_t *) v;
+    struct speed_log *curr_entry;
+    int halfway = SPEED_LIST_SIZE >> 1;
+    
+    curr_entry = speed_changes[currentPrint]; 
+    	
+	//seq_printf(s, "%Ld\n", *spos);
+	seq_printf(s, "@speedEvent{\"seq_numb\":%d,\"CPU\":%u,\"speed\":%u,\"relation\":%u,\"time_sec\":%ld,\"time_nsec\":%ld}\n",
+	    curr_entry->seqNumb,
+	    curr_entry->cpu,
+	    curr_entry->speed,
+	    curr_entry->relation,
+	    curr_entry->time.tv_sec,
+	    curr_entry->time.tv_nsec
+	    );
+	return 0;
+}
+
+/* sequential Snappy proc structures */
+static struct seq_operations ct_seq_ops = {
+	.start = ct_seq_start,
+	.next  = ct_seq_next,
+	.stop  = ct_seq_stop,
+	.show  = ct_seq_show
+};
+
+static int ct_open(struct inode *inode, struct file *file)
+{
+	return seq_open(file, &ct_seq_ops);
+};
+
+static struct file_operations ct_file_ops = {
+	.owner   = THIS_MODULE,
+	.open    = ct_open,
+	.read    = seq_read,
+	.llseek  = seq_lseek,
+	.release = seq_release
+};
 
 lock_policy_rwsem(read, cpu);
 
@@ -1424,6 +1515,32 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
 {
 	int retval = -EINVAL;
 	int i = 0;
+	static int speedInit = 0;
+	static struct proc_dir_entry *proc_entry;
+	static struct speed_log *current_log;
+	
+	// Robust Snappy modifications 
+	
+	if (!speedInit) {
+	    proc_entry = create_proc_entry("SnappySpeed",0,NULL);
+        if (proc_entry) {
+            // for sequential proc version
+            proc_entry->proc_fops = &ct_file_ops;
+            // init array
+            for (i = 0; i < SPEED_LIST_SIZE; i++) {
+                speed_changes[i] = kmalloc(sizeof(struct speed_log), GFP_KERNEL);
+                speed_changes[i]->seqNumb = -1;
+                speed_changes[i]->cpu = 0;
+                speed_changes[i]->speed = 0;
+                speed_changes[i]->relation = 0;
+            }
+            speedInit = 1;
+        } else {
+            printk("Snappy speed creation failed!");
+            speedInit = 1;
+        }
+    }
+	/*
 	struct timespec timestart, timeend;
 	if (timeTo40Thou == 0) {
 	    getnstimeofday(&timestart);
@@ -1449,13 +1566,25 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
 	    getnstimeofday(&timeend);
 	    timeToThou = (timeend.tv_sec - timestart.tv_sec)*1000000000LL + 
 	        (timeend.tv_nsec - timestart.tv_nsec);
-	}
-
+	}*/
 
 	pr_debug("target for CPU %u: %u kHz, relation %u\n", policy->cpu,
 		target_freq, relation);
-    printk("Snappy CPU change for CPU <%u>: <%u> kHz, relation <%u>, 40000 transitions <%llu>, 400000 transitions <%llu>\n", 
-        policy->cpu, target_freq, relation, timeToThou, timeTo40Thou);
+    
+    current_log = speed_changes[currEntry];
+    
+    current_log->seqNumb = currEntry;
+    currEntry++;
+    current_log->cpu = policy->cpu;
+    current_log->speed = target_freq;
+    current_log->relation = relation;
+    current_log->time = current_kernel_time();
+    //ktime_get_ts(&(current_log->time));
+    if (currEntry >= SPEED_LIST_SIZE)
+        currEntry = 0;
+    
+    
+      
 	if (cpu_online(policy->cpu) && cpufreq_driver->target)
 		retval = cpufreq_driver->target(policy, target_freq, relation);
 
