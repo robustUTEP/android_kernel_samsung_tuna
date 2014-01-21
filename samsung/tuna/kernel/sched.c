@@ -86,7 +86,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/sched.h>
 
-#define PROC_LIST_SIZE 5000
+#define PROC_LIST_SIZE 20000
+#define NUM_CPUS 2
 
 /*
  * Convert user-nice values [ -20 ... 0 ... 19 ]
@@ -141,25 +142,23 @@ static inline int task_has_rt_policy(struct task_struct *p)
 
 /* log buffer structure */
 struct task_struct_log {
-    int seqNumb;
+    //int seqNumb;
     int count;
-    char comm[TASK_COMM_LEN];
+    //char comm[TASK_COMM_LEN];
     int on_cpu;
     pid_t pid;
-	pid_t tgid;
-	int prio, static_prio, normal_prio;
+	//pid_t tgid;
+	//int prio, static_prio, normal_prio;
 	
-    cputime_t utime, stime, utimescaled, stimescaled;
-	cputime_t gtime;
+    cputime_t utime, stime;//, utimescaled, stimescaled;
+	//cputime_t gtime;
 	
 };
 
-struct task_struct_log *sched_tasks[PROC_LIST_SIZE];
-//struct task_struct_log *lastSched;
-//static int lastCPU = -1;
-static int currEntry = 0;
+struct task_struct_log *sched_tasks[NUM_CPUS][PROC_LIST_SIZE];
+static int currEntry[NUM_CPUS] = {0,0};
 static unsigned int currPrint = 0;
-static unsigned int event_count = 0;
+static unsigned int snappy_sched_count[NUM_CPUS] = {0,0};
 
 /* snappy seq code */
 static void *ct_seq_start(struct seq_file *s, loff_t *pos)
@@ -198,18 +197,15 @@ static int ct_seq_show(struct seq_file *s, void *v)
     int halfway = PROC_LIST_SIZE >> 1;
     unsigned user_time;
     unsigned system_time;
-	
-	curr_proc = sched_tasks[currPrint];
-	user_time = cputime_to_usecs(curr_proc->utime);
-    system_time = cputime_to_usecs(curr_proc->stime);
+	int i;
 	
 	if (currPrint == 0) {
-	    seq_printf(s, "currEntry %u\n",currEntry);
+	    seq_printf(s, "currEntry[0] %u sizeof %u\n",currEntry[0],sizeof(struct task_struct_log));
 	}
     if (currPrint == halfway) {
-	    seq_printf(s, "currEntry %u\n",currEntry);
+	    seq_printf(s, "currEntry[0] %u sizeof %u\n",currEntry[0],sizeof(struct task_struct_log));
 	}
-	seq_printf(s, "@schedEvent{\"seq_numb\":%d,\"count\":%u,\"CPU\":%d,\"name\":\"%s\",\"pid\":\"%d\",\"tid\":\"%d\",\"priority\":%d,\"static_priority\":%d, \"normal_priority\":%d,\"user_time_usec\":%u,\"system_time_usec\":%u}\n",
+	/*seq_printf(s, "@schedEvent{\"seq_numb\":%d,\"count\":%u,\"CPU\":%d,\"name\":\"%s\",\"pid\":\"%d\",\"tid\":\"%d\",\"priority\":%d,\"static_priority\":%d, \"normal_priority\":%d,\"user_time_usec\":%u,\"system_time_usec\":%u}\n",
             curr_proc->seqNumb,
             curr_proc->count,
             curr_proc->on_cpu, 
@@ -220,7 +216,19 @@ static int ct_seq_show(struct seq_file *s, void *v)
             curr_proc->static_prio, 
             curr_proc->normal_prio, 
             user_time, 
-            system_time);
+            system_time);*/
+    
+    for (i = 0; i < NUM_CPUS;i++) {
+        curr_proc = sched_tasks[i][currPrint];
+	    user_time = cputime_to_usecs(curr_proc->utime);
+        system_time = cputime_to_usecs(curr_proc->stime);
+        seq_printf(s, "@schedEvent{\"count\":%u,\"CPU\":%d,\"tid\":\"%d\",\"user_time_usec\":%u,\"system_time_usec\":%u}\n",
+                curr_proc->count,
+                curr_proc->on_cpu, 
+                curr_proc->pid, 
+                user_time, 
+                system_time);
+    }
 	return 0;
 }
 
@@ -250,7 +258,12 @@ int read_proc( char *buf, char **start, off_t offset, int count, int *eof )
 {
     /* Initialize the total length */
     int len = 0;    /* Format the data in the buffer */
-    len += sprintf( buf + len, "%u\n", event_count );
+    int i;
+    for (i = 0; i < NUM_CPUS; i++)
+        len += sprintf( buf + len, "%u\n", snappy_sched_count[i]);
+   
+    /* print num cpus */
+    len += sprintf(buf + len, "%d\n", NUM_CPUS);
     
    
     /* If our data length is smaller than what
@@ -4362,31 +4375,10 @@ static void __sched __schedule(void)
 	int cpu;
 	int i;
 	
-	static int procInit = 0;
+	static int procInit[NUM_CPUS] = {0,0};
 	static struct proc_dir_entry *proc_entry;
 	static struct proc_dir_entry *proc_count;
 	struct task_struct_log *lastSched;
-	
-	// Robust Snappy modifications 
-	//proc_entry = create_proc_read_entry("SnappySched",0,NULL,read_proc,NULL);
-	
-	if (!procInit) {
-	    proc_entry = create_proc_entry("SnappySched",0,NULL);
-	    proc_count = create_proc_entry("SnappyCount",0,NULL);
-        if (proc_entry) {
-            proc_count->read_proc = read_proc;
-            // for sequential proc version
-            proc_entry->proc_fops = &ct_file_ops;
-            // init array
-            for (i = 0; i < PROC_LIST_SIZE; i++) {
-                sched_tasks[i] = kmalloc(sizeof(struct task_struct_log), GFP_KERNEL);
-            }
-            procInit = 1;
-        } else {
-            printk("Snappy proc creation failed!");
-            procInit = 1;
-        }
-    }
 
 need_resched:
 	preempt_disable();
@@ -4394,6 +4386,31 @@ need_resched:
 	rq = cpu_rq(cpu);
 	rcu_note_context_switch(cpu);
 	prev = rq->curr;
+	
+    // Robust Snappy modifications 
+	
+	if (!procInit[cpu]) {
+	    // only create entries if cpu == 0;
+	    // this should works because the boot cpu (0)
+	    // sets up the scheduler and begins the 
+	    // init process (1) before the other 
+	    // cpus are brought up and processes are 
+	    // scheduled there
+	    if (!cpu) {
+	        proc_entry = create_proc_entry("SnappySched",0,NULL);
+	        proc_count = create_proc_entry("SnappyCount",0,NULL);
+	    }
+        if (proc_entry) {
+            proc_count->read_proc = read_proc;
+            proc_entry->proc_fops = &ct_file_ops;
+            
+            // init array
+            for (i = 0; i < PROC_LIST_SIZE; i++) {
+                sched_tasks[cpu][i] = kmalloc(sizeof(struct task_struct_log), GFP_KERNEL);
+            }
+            procInit[cpu] = 1;
+        }
+    }
 
 	schedule_debug(prev);
 
@@ -4438,23 +4455,23 @@ need_resched:
 	
 	// snappy mods
 	
-	lastSched = sched_tasks[currEntry];
-	currEntry++;
-	lastSched->seqNumb = currEntry;
-	lastSched->count = event_count;
+	lastSched = sched_tasks[cpu][currEntry[cpu]];
+	currEntry[cpu]++;
+	//lastSched->seqNumb = currEntry[cpu];
+	lastSched->count = snappy_sched_count[cpu];
 	lastSched->on_cpu = cpu;
-	strcpy(lastSched->comm, prev->comm);
-	lastSched->tgid = prev->tgid;
+	//strcpy(lastSched->comm, prev->comm);
+	//lastSched->tgid = prev->tgid;
 	lastSched->pid = prev->pid;
-	lastSched->prio = prev->prio;
-	lastSched->static_prio = prev->static_prio; 
-	lastSched->normal_prio = prev->normal_prio; 
+	//lastSched->prio = prev->prio;
+	//lastSched->static_prio = prev->static_prio; 
+	//lastSched->normal_prio = prev->normal_prio; 
 	lastSched->utime = prev->utime; 
 	lastSched->stime = prev->stime;
-	event_count++;
+	snappy_sched_count[cpu]++;
 	
-	if (currEntry >= PROC_LIST_SIZE)
-	    currEntry = 0;
+	if (currEntry[cpu] >= PROC_LIST_SIZE)
+	    currEntry[cpu] = 0;
 
 	if (likely(prev != next)) {
 		rq->nr_switches++;
