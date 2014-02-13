@@ -52,6 +52,8 @@ static DEFINE_SPINLOCK(cpufreq_driver_lock);
 
 static u8 timeToThou = 0;
 static u8 timeTo40Thou = 0;
+static struct timespec timestart, timeend;
+static struct timespec timestart40, timeend40;
 
 /*
  * cpu_policy_rwsem is a per CPU reader-writer semaphore designed to cure
@@ -101,7 +103,7 @@ struct speed_log {
     struct timespec time;
 };
 
-struct speed_log *speed_changes[SPEED_LIST_SIZE];
+struct speed_log *speed_changes[SPEED_LIST_SIZE + 1];
 static int currEntry = 0;
 static unsigned int currentPrint = 0;
 
@@ -140,19 +142,33 @@ static int ct_seq_show(struct seq_file *s, void *v)
 
     loff_t *spos = (loff_t *) v;
     struct speed_log *curr_entry;
-    int halfway = SPEED_LIST_SIZE >> 1;
     
     curr_entry = speed_changes[currentPrint]; 
     	
-	//seq_printf(s, "%Ld\n", *spos);
-	seq_printf(s, "@speedEvent{\"seq_numb\":%d,\"CPU\":%u,\"speed\":%u,\"relation\":%u,\"time_sec\":%ld,\"time_nsec\":%ld}\n",
-	    curr_entry->seqNumb,
-	    curr_entry->cpu,
-	    curr_entry->speed,
-	    curr_entry->relation,
-	    curr_entry->time.tv_sec,
-	    curr_entry->time.tv_nsec
+	if (currentPrint == 0) {
+	    seq_printf(s, "@transitionTime{\"40k\":\"%d\",\"1k\":\"%d\",\"start40\":%ld.%ld,\"end40\":%ld.%ld,\"start\":%ld.%ld,\"end\":%ld.%ld}\n",
+	        timeTo40Thou,
+	        timeToThou,
+	        timestart40.tv_sec,
+	        timestart40.tv_nsec,
+	        timeend40.tv_sec,
+	        timeend40.tv_nsec,
+	        timestart.tv_sec,
+	        timestart.tv_nsec,
+	        timeend.tv_sec,
+	        timeend.tv_nsec
 	    );
+	}
+	//if (curr_entry->seqNumb > -1) {
+	    seq_printf(s, "@speedEvent{\"seq_numb\":%d,\"CPU\":%u,\"speed\":%u,\"relation\":%u,\"time_sec\":%ld,\"time_nsec\":%ld}\n",
+	        curr_entry->seqNumb,
+	        curr_entry->cpu,
+	        curr_entry->speed,
+	        curr_entry->relation,
+	        curr_entry->time.tv_sec,
+	        curr_entry->time.tv_nsec
+	        );
+	//}
 	return 0;
 }
 
@@ -1540,33 +1556,36 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
             speedInit = 1;
         }
     }
-	/*
-	struct timespec timestart, timeend;
+	
 	if (timeTo40Thou == 0) {
-	    getnstimeofday(&timestart);
-	    for (i = 0; i < 10000; i++) {
-	        cpufreq_driver->target(policy, 350000, relation);
-	        cpufreq_driver->target(policy, 700000, relation);
-	        cpufreq_driver->target(policy, 900000, relation);
-	        cpufreq_driver->target(policy, 1200000, relation);
+	    timestart40 = current_kernel_time();
+	    if (timestart40.tv_sec > 10) {
+	        for (i = 0; i < 10000; i++) {
+	            cpufreq_driver->target(policy, 350000, relation);
+	            cpufreq_driver->target(policy, 700000, relation);
+	            cpufreq_driver->target(policy, 900000, relation);
+	            cpufreq_driver->target(policy, 1200000, relation);
+	        }
+	        timeend40 = current_kernel_time();
+	        timeTo40Thou = (timeend40.tv_sec - timestart40.tv_sec)*1000000000LL + 
+	            (timeend40.tv_nsec - timestart40.tv_nsec);
 	    }
-	    getnstimeofday(&timeend);
-	    timeTo40Thou = (timeend.tv_sec - timestart.tv_sec)*1000000000LL + 
-	        (timeend.tv_nsec - timestart.tv_nsec);
 	}
 	
     if (timeToThou == 0) {
-	    getnstimeofday(&timestart);
-	    for (i = 0; i < 1000; i++) {
-	        cpufreq_driver->target(policy, 350000, relation);
-	        cpufreq_driver->target(policy, 700000, relation);
-	        cpufreq_driver->target(policy, 900000, relation);
-	        cpufreq_driver->target(policy, 1200000, relation);
+	    timestart = current_kernel_time();
+	    if (timestart.tv_sec > 10) {
+	        for (i = 0; i < 1000; i++) {
+	            cpufreq_driver->target(policy, 350000, relation);
+	            cpufreq_driver->target(policy, 700000, relation);
+	            cpufreq_driver->target(policy, 900000, relation);
+	            cpufreq_driver->target(policy, 1200000, relation);
+	        }
+	        timeend = current_kernel_time();
+	        timeToThou = (timeend.tv_sec - timestart.tv_sec)*1000000000LL + 
+	            (timeend.tv_nsec - timestart.tv_nsec);
 	    }
-	    getnstimeofday(&timeend);
-	    timeToThou = (timeend.tv_sec - timestart.tv_sec)*1000000000LL + 
-	        (timeend.tv_nsec - timestart.tv_nsec);
-	}*/
+	}
 
 	pr_debug("target for CPU %u: %u kHz, relation %u\n", policy->cpu,
 		target_freq, relation);
@@ -1579,7 +1598,6 @@ int __cpufreq_driver_target(struct cpufreq_policy *policy,
     current_log->speed = target_freq;
     current_log->relation = relation;
     current_log->time = current_kernel_time();
-    //ktime_get_ts(&(current_log->time));
     if (currEntry >= SPEED_LIST_SIZE)
         currEntry = 0;
     

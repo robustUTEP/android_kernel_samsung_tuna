@@ -77,8 +77,6 @@
 #include <asm/irq_regs.h>
 #include <asm/mutex.h>
 
-#include <linux/proc_fs.h> 
-
 #include "sched_cpupri.h"
 #include "workqueue_sched.h"
 #include "sched_autogroup.h"
@@ -86,8 +84,7 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/sched.h>
 
-#define PROC_LIST_SIZE 20000
-#define NUM_CPUS 2
+#define PROC_LIST_SIZE 30000
 
 /*
  * Convert user-nice values [ -20 ... 0 ... 19 ]
@@ -144,7 +141,7 @@ static inline int task_has_rt_policy(struct task_struct *p)
 struct task_struct_log {
     //int seqNumb;
     int count;
-    //char comm[TASK_COMM_LEN];
+    char comm[TASK_COMM_LEN];
     int on_cpu;
     pid_t pid;
 	//pid_t tgid;
@@ -156,9 +153,8 @@ struct task_struct_log {
 };
 
 struct task_struct_log *sched_tasks[NUM_CPUS][PROC_LIST_SIZE];
-static int currEntry[NUM_CPUS] = {0,0};
 static unsigned int currPrint = 0;
-static unsigned int snappy_sched_count[NUM_CPUS] = {0,0};
+static int currEntry[NUM_CPUS] = {0,0};
 
 /* snappy seq code */
 static void *ct_seq_start(struct seq_file *s, loff_t *pos)
@@ -198,13 +194,13 @@ static int ct_seq_show(struct seq_file *s, void *v)
     unsigned user_time;
     unsigned system_time;
 	int i;
-	
+	/*
 	if (currPrint == 0) {
 	    seq_printf(s, "currEntry[0] %u sizeof %u\n",currEntry[0],sizeof(struct task_struct_log));
 	}
     if (currPrint == halfway) {
 	    seq_printf(s, "currEntry[0] %u sizeof %u\n",currEntry[0],sizeof(struct task_struct_log));
-	}
+	}*/
 	/*seq_printf(s, "@schedEvent{\"seq_numb\":%d,\"count\":%u,\"CPU\":%d,\"name\":\"%s\",\"pid\":\"%d\",\"tid\":\"%d\",\"priority\":%d,\"static_priority\":%d, \"normal_priority\":%d,\"user_time_usec\":%u,\"system_time_usec\":%u}\n",
             curr_proc->seqNumb,
             curr_proc->count,
@@ -222,9 +218,10 @@ static int ct_seq_show(struct seq_file *s, void *v)
         curr_proc = sched_tasks[i][currPrint];
 	    user_time = cputime_to_usecs(curr_proc->utime);
         system_time = cputime_to_usecs(curr_proc->stime);
-        seq_printf(s, "@schedEvent{\"count\":%u,\"CPU\":%d,\"tid\":\"%d\",\"user_time_usec\":%u,\"system_time_usec\":%u}\n",
+        seq_printf(s, "@schedEvent{\"count\":%u,\"CPU\":%d,\"name\":\"%s\",\"tid\":\"%d\",\"user_time_usec\":%u,\"system_time_usec\":%u}\n",
                 curr_proc->count,
                 curr_proc->on_cpu, 
+                curr_proc->comm,
                 curr_proc->pid, 
                 user_time, 
                 system_time);
@@ -4460,7 +4457,7 @@ need_resched:
 	//lastSched->seqNumb = currEntry[cpu];
 	lastSched->count = snappy_sched_count[cpu];
 	lastSched->on_cpu = cpu;
-	//strcpy(lastSched->comm, prev->comm);
+	strcpy(lastSched->comm, prev->comm);
 	//lastSched->tgid = prev->tgid;
 	lastSched->pid = prev->pid;
 	//lastSched->prio = prev->prio;
